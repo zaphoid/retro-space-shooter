@@ -1,0 +1,942 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Retro Space Shooter</title>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3/dist/phaser.js"></script>
+    <style>
+        body {
+            margin: 0;
+            background: #000;
+        }
+        #game-container {
+            margin: 0 auto;
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container"></div>
+
+    <script>
+        // ====================
+        // Start Scene
+        // ====================
+        class StartScene extends Phaser.Scene {
+            constructor() {
+                super({ key: 'StartScene' });
+            }
+
+            preload() {
+                // Load assets
+                this.load.image('player', 'assets/player.png');
+                this.load.image('enemy', 'assets/enemy.png');
+                this.load.image('asteroid_large', 'assets/asteroid_large.png');
+                this.load.image('asteroid_medium', 'assets/asteroid_medium.png');
+                this.load.image('asteroid_small', 'assets/asteroid_small.png');
+                // Removed bullet image loading since we'll create it programmatically
+                this.load.audio('shoot', 'assets/sounds/shoot.wav');
+                this.load.audio('explosion', 'assets/sounds/explosion.wav');
+                this.load.audio('powerup', 'assets/sounds/powerup.wav'); // Added
+                this.load.audio('shield', 'assets/sounds/shield.wav');     // Added
+                this.load.audio('fire_rate_booster', 'assets/sounds/fire_rate_booster.wav'); // Added
+                this.load.audio('invisibility', 'assets/sounds/invisibility.wav'); // Added
+                this.load.audio('warp', 'assets/sounds/warp.wav');         // Added
+                this.load.audio('collision', 'assets/sounds/collision.wav'); // Added
+
+                // Create a simple star texture if not already created
+                if (!this.textures.exists('star')) {
+                    const graphics = this.add.graphics();
+                    graphics.fillStyle(0xffffff, 1);
+                    graphics.fillCircle(2, 2, 2);
+                    graphics.generateTexture('star', 4, 4);
+                    graphics.destroy();
+                }
+            }
+
+            create() {
+                // Create background
+                this.cameras.main.setBackgroundColor('#000');
+
+                // Title Text
+                this.add.text(this.scale.width / 2, this.scale.height / 2 - 100, 'Retro Space Shooter', {
+                    fontSize: '48px',
+                    fill: '#ffffff'
+                }).setOrigin(0.5);
+
+                // Instructions
+                this.add.text(this.scale.width / 2, this.scale.height / 2, 'Press SPACE to Start', {
+                    fontSize: '24px',
+                    fill: '#ffffff'
+                }).setOrigin(0.5);
+
+                // Input
+                this.spaceBar = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+
+                // Starfield Background
+                this.starGroup = this.add.group({
+                    key: 'star',
+                    repeat: 500,
+                    setXY: { x: 0, y: 0, stepX: 8, stepY: 6 }
+                });
+
+                this.starGroup.children.iterate(function (star) {
+                    star.setX(Phaser.Math.Between(0, 800));
+                    star.setY(Phaser.Math.Between(0, 600));
+                    star.setAlpha(Phaser.Math.FloatBetween(0.2, 1));
+                });
+
+                // **Create Bullet Texture Programmatically**
+                const bulletGraphics = this.add.graphics();
+                bulletGraphics.fillStyle(0xff0000, 1); // Red color
+                bulletGraphics.fillCircle(2, 2, 2); // Radius 2
+                bulletGraphics.generateTexture('bullet', 4, 4); // 4x4 pixels
+                bulletGraphics.destroy(); // Clean up graphics object
+
+                // **Create Power-Up Textures Programmatically**
+                const powerUpTypes = ['shield', 'fire_rate', 'invisibility', 'warp'];
+                const colors = {
+                    'shield': 0x00ff00,        // Green
+                    'fire_rate': 0xffff00,     // Yellow
+                    'invisibility': 0x0000ff,  // Blue
+                    'warp': 0xff00ff            // Magenta
+                };
+
+                powerUpTypes.forEach(type => {
+                    const graphics = this.add.graphics();
+                    graphics.fillStyle(colors[type], 1);
+                    graphics.fillCircle(16, 16, 16); // Radius 16
+                    graphics.generateTexture(type, 32, 32); // 32x32 pixels
+                    graphics.destroy();
+                });
+
+                // **Log to confirm texture creation**
+                console.log('Bullet texture created:', this.textures.exists('bullet'));
+                powerUpTypes.forEach(type => {
+                    console.log(`${type} texture created:`, this.textures.exists(type));
+                });
+            }
+
+            update(time, delta) {
+                if (Phaser.Input.Keyboard.JustDown(this.spaceBar)) {
+                    this.scene.start('GameScene');
+                }
+            }
+        }
+
+        // ====================
+        // PowerUp Class
+        // ====================
+        class PowerUp extends Phaser.Physics.Arcade.Sprite {
+            constructor(scene, x, y, type) {
+                super(scene, x, y, type); // 'shield', 'fire_rate', 'invisibility', 'warp'
+                scene.add.existing(this);
+                scene.physics.add.existing(this);
+                
+                this.type = type;
+                this.setActive(true);
+                this.setVisible(true);
+                this.setOrigin(0.5, 0.5);
+                
+                // Configure physics properties
+                this.setCircle(16); // Adjust based on your power-up sprite size
+                this.setImmovable(true);
+                this.setScale(1);
+                
+                // Optional: Add spin effect
+                this.scene.tweens.add({
+                    targets: this,
+                    angle: 360,
+                    duration: 2000,
+                    repeat: -1
+                });
+            }
+        }
+
+        // ====================
+        // Bullet Class
+        // ====================
+        class Bullet extends Phaser.Physics.Arcade.Sprite {
+            constructor(scene, x, y) {
+                super(scene, x, y, 'bullet'); // Use the 'bullet' texture
+                scene.add.existing(this);
+                scene.physics.add.existing(this);
+
+                // Configure bullet properties
+                this.setCollideWorldBounds(false);
+                this.setActive(false);
+                this.setVisible(false);
+                this.setOrigin(0.5, 0.5);
+                this.lifespan = 2000; // Bullet lifespan in milliseconds
+            }
+
+            /**
+             * Fires the bullet from a specific position with a given angle and speed.
+             * @param {number} x - The x-coordinate to spawn the bullet.
+             * @param {number} y - The y-coordinate to spawn the bullet.
+             * @param {number} angle - The angle in radians indicating the bullet's direction.
+             * @param {number} speed - The speed at which the bullet travels.
+             */
+            fire(x, y, angle, speed) {
+                this.body.reset(x, y); // Reset the bullet's position
+                this.setActive(true);
+                this.setVisible(true);
+                this.setRotation(angle + Math.PI / 2); // Adjust rotation based on angle
+                this.setVelocity(Math.cos(angle) * speed, Math.sin(angle) * speed);
+                this.lifespan = 2000; // Reset lifespan when fired
+
+                // Optional: Log firing action
+                console.log(`Bullet fired at (${x.toFixed(2)}, ${y.toFixed(2)}) with angle ${angle.toFixed(2)} radians and speed ${speed}`);
+            }
+
+            /**
+             * Updates the bullet's state each frame.
+             * @param {number} time - The current time.
+             * @param {number} delta - The time elapsed since the last frame.
+             */
+            update(time, delta) {
+                this.lifespan -= delta;
+                if (this.lifespan <= 0 || this.isOutOfBounds()) {
+                    this.disableBullet();
+                }
+            }
+
+            /**
+             * Checks if the bullet is out of the game world bounds.
+             * @returns {boolean} - True if out of bounds, false otherwise.
+             */
+            isOutOfBounds() {
+                return (this.x < 0 || this.x > 4000 || this.y < 0 || this.y > 4000);
+            }
+
+            /**
+             * Disables the bullet, deactivating it and hiding it from the game.
+             */
+            disableBullet() {
+                this.setActive(false);
+                this.setVisible(false);
+                this.body.stop(); // Stop the bullet's movement
+                this.body.reset(0, 0); // Reset position to origin
+                // Optional: Log deactivation
+                console.log('Bullet disabled');
+            }
+        }
+
+        // ====================
+        // Player Class
+        // ====================
+        class Player {
+            constructor(scene, x, y, texture) {
+                this.scene = scene;
+                this.sprite = scene.physics.add.sprite(x, y, texture);
+                this.sprite.setScale(1.5);
+                this.sprite.setCollideWorldBounds(true);
+                this.sprite.setDamping(true);
+                this.sprite.setDrag(0.99);
+                this.sprite.setAngularDrag(400);
+                this.sprite.setMaxVelocity(300);
+                this.sprite.setOrigin(0.5, 0.5);
+                this.sprite.setAngle(0);
+                this.sprite.body.allowRotation = true;
+
+                // Player properties
+                this.health = 3;
+                this.weaponLevel = 1;
+                this.shieldActive = false;
+                this.fireRateBoosterActive = false;
+                this.invisibilityActive = false;
+                
+                // **Initialize Firing Variables**
+                this.fireRate = 500; // Time between shots in milliseconds
+                this.lastFired = 0;   // Timestamp of the last fired bullet
+                this.bulletSpeed = 300; // Speed of the bullet in pixels per second
+
+                // Input
+                this.keyW = scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.W);
+                this.keyA = scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.A);
+                this.keyS = scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.S);
+                this.keyD = scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.D);
+                this.spaceBar = scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+            }
+
+            update() {
+                this.handleMovement();
+                this.handleShooting();
+            }
+
+            handleMovement() {
+                const ROTATION_SPEED = 200; // Degrees per second
+                const THRUST = 200; // Acceleration per second
+
+                // Rotate left (A key)
+                if (this.keyA.isDown) {
+                    this.sprite.setAngularVelocity(-ROTATION_SPEED);
+                }
+                // Rotate right (D key)
+                else if (this.keyD.isDown) {
+                    this.sprite.setAngularVelocity(ROTATION_SPEED);
+                }
+                else {
+                    this.sprite.setAngularVelocity(0);
+                }
+
+                // Thrust forward (W key)
+                if (this.keyW.isDown) {
+                    const angle = Phaser.Math.DegToRad(this.sprite.angle - 90);
+                    const accelX = Math.cos(angle) * THRUST;
+                    const accelY = Math.sin(angle) * THRUST;
+                    this.sprite.setAcceleration(accelX, accelY);
+                }
+                else {
+                    this.sprite.setAcceleration(0, 0);
+                }
+            }
+
+            handleShooting() {
+                const time = this.scene.time.now;
+                if (this.spaceBar.isDown && time > this.lastFired) {
+                    const bullets = this.scene.bullets;
+                    for (let i = 0; i < this.weaponLevel; i++) {
+                        const bullet = bullets.get();
+                        if (bullet) {
+                            const angle = Phaser.Math.DegToRad(this.sprite.angle - 90);
+                            const spawnOffset = 20 + i * 5;
+                            const bulletX = this.sprite.x + Math.cos(angle) * spawnOffset;
+                            const bulletY = this.sprite.y + Math.sin(angle) * spawnOffset;
+
+                            bullet.fire(bulletX, bulletY, angle, this.bulletSpeed);
+                        }
+                    }
+                    this.lastFired = time + this.fireRate;
+
+                    // Play shooting sound
+                    this.scene.sound.play('shoot');
+                }
+            }
+
+            takeDamage(amount) {
+                if (this.shieldActive) {
+                    console.log('Shield absorbed damage');
+                    return; // Shield absorbs damage
+                }
+
+                this.health -= amount;
+                console.log(`Player took damage. Health: ${this.health}`);
+            }
+
+            upgradeWeapon() {
+                this.weaponLevel += 1;
+                console.log(`Weapon upgraded. Level: ${this.weaponLevel}`);
+            }
+        }
+
+        // ====================
+        // Enemy Class
+        // ====================
+        class Enemy extends Phaser.Physics.Arcade.Sprite {
+            constructor(scene, x, y, texture) {
+                super(scene, x, y, texture);
+                scene.add.existing(this);
+                scene.physics.add.existing(this);
+
+                this.health = 1;
+                this.speed = 100;
+                this.target = null;
+            }
+
+            initialize(player) {
+                this.target = player;
+                this.setActive(true);
+                this.setVisible(true);
+                this.setVelocity(0, 0);
+            }
+
+            update(time, delta) {
+                if (this.target) {
+                    // **Check if Player is Invisible**
+                    if (this.target.invisibilityActive) {
+                        // Stop tracking
+                        this.setVelocity(0, 0);
+                    } else {
+                        // Normal behavior: Move towards the player
+                        this.scene.physics.moveToObject(this, this.target.sprite, this.speed);
+                    }
+                }
+            }
+
+            takeDamage(amount) {
+                this.health -= amount;
+                console.log(`Enemy took damage. Health: ${this.health}`);
+                if (this.health <= 0) {
+                    this.disableBody(true, true); // Deactivate and hide the enemy
+                    this.scene.score += 50; // Increment score
+                    this.scene.scoreText.setText('Score: ' + this.scene.score);
+                    console.log('Enemy destroyed');
+                }
+            }
+        }
+
+        // ====================
+        // Asteroid Class
+        // ====================
+        class Asteroid extends Phaser.Physics.Arcade.Sprite {
+            constructor(scene, x, y, texture) {
+                super(scene, x, y, texture);
+                scene.add.existing(this);
+                scene.physics.add.existing(this);
+
+                this.size = 1; // 1: Large, 2: Medium, 3: Small
+                this.health = 3;
+                this.speed = Phaser.Math.FloatBetween(50, 150);
+                this.rotationSpeed = Phaser.Math.FloatBetween(-100, 100);
+                this.setAngularVelocity(this.rotationSpeed);
+            }
+
+            initialize(size) {
+                this.size = size;
+                switch (size) {
+                    case 1:
+                        this.setTexture('asteroid_large');
+                        this.health = 3;
+                        break;
+                    case 2:
+                        this.setTexture('asteroid_medium');
+                        this.health = 2;
+                        break;
+                    case 3:
+                        this.setTexture('asteroid_small');
+                        this.health = 1;
+                        break;
+                }
+
+                // Set random velocity
+                const angle = Phaser.Math.FloatBetween(0, 2 * Math.PI);
+                this.setVelocity(Math.cos(angle) * this.speed, Math.sin(angle) * this.speed);
+            }
+
+            update(time, delta) {
+                // Handle asteroid movement and rotation if needed
+            }
+
+            takeDamage(amount) {
+                this.health -= amount;
+                console.log(`Asteroid took damage. Health: ${this.health}`);
+                if (this.health <= 0) {
+                    this.split();
+                    this.disableBody(true, true); // Deactivate and hide the asteroid
+                    this.scene.score += 30; // Increment score
+                    this.scene.scoreText.setText('Score: ' + this.scene.score);
+                    console.log('Asteroid destroyed');
+                }
+            }
+
+            split() {
+                if (this.size >= 3) return; // Smallest size
+
+                const newSize = this.size + 1;
+                for (let i = 0; i < 2; i++) {
+                    const asteroid = this.scene.asteroids.get(this.x, this.y, `asteroid_${newSize}`);
+                    if (asteroid) {
+                        asteroid.setActive(true);
+                        asteroid.setVisible(true);
+                        asteroid.initialize(newSize);
+                        console.log(`Asteroid split into size ${newSize}`);
+                    }
+                }
+            }
+        }
+
+        // ====================
+        // Game Scene
+        // ====================
+        class GameScene extends Phaser.Scene {
+            constructor() {
+                super({ key: 'GameScene' });
+            }
+
+            preload() {
+                // Preload assets if necessary (already handled in StartScene)
+            }
+
+            create() {
+                // **Initialize variables**
+                this.score = 0;
+                this.level = 1;
+
+                // Set world bounds
+                this.physics.world.setBounds(0, 0, 4000, 4000);
+
+                // Create starfield
+                this.createStarfield();
+
+                // Create player
+                this.player = new Player(this, 2000, 2000, 'player');
+
+                // **Create Bullet Group**
+                this.bullets = this.physics.add.group({
+                    classType: Bullet,
+                    runChildUpdate: true,
+                    maxSize: 100 // Increased maxSize for more bullets
+                });
+
+                // Create enemy and asteroid groups
+                this.enemies = this.physics.add.group({
+                    classType: Enemy,
+                    runChildUpdate: true
+                });
+
+                this.asteroids = this.physics.add.group({
+                    classType: Asteroid,
+                    runChildUpdate: true
+                });
+
+                // **Create Power-Up Group**
+                this.powerUps = this.physics.add.group({
+                    classType: PowerUp,
+                    runChildUpdate: true,
+                    maxSize: 10
+                });
+
+                // **Spawn Initial Enemies, Asteroids, and Power-Ups**
+                this.spawnEnemies(this.level);
+                this.spawnAsteroids(this.level);
+                this.spawnPowerUps();
+
+                // Create UI
+                this.createUI();
+
+                // Set up collisions
+                this.physics.add.overlap(this.bullets, this.enemies, this.handleBulletEnemyCollision, null, this);
+                this.physics.add.overlap(this.bullets, this.asteroids, this.handleBulletAsteroidCollision, null, this);
+                this.physics.add.overlap(this.player.sprite, this.enemies, this.handlePlayerEnemyCollision, null, this);
+                this.physics.add.overlap(this.player.sprite, this.asteroids, this.handlePlayerAsteroidCollision, null, this);
+                this.physics.add.overlap(this.player.sprite, this.powerUps, this.handlePowerUpCollision, null, this);
+
+                // Camera setup
+                this.cameras.main.setBounds(0, 0, 4000, 4000);
+                this.cameras.main.startFollow(this.player.sprite, true, 0.05, 0.05);
+
+                // Environmental Hazards
+                this.createEnvironmentalHazards();
+            }
+
+            update(time, delta) {
+                this.player.update();
+
+                // Check level progression
+                if (this.enemies.countActive() === 0 && this.asteroids.countActive() === 0) {
+                    this.levelUp();
+                }
+
+                // Update environmental hazards
+                this.updateEnvironmentalHazards();
+            }
+
+            createStarfield() {
+                // Create a star texture if not already created
+                if (!this.textures.exists('star')) {
+                    const graphics = this.add.graphics();
+                    graphics.fillStyle(0xffffff, 1);
+                    graphics.fillCircle(2, 2, 2);
+                    graphics.generateTexture('star', 4, 4);
+                    graphics.destroy();
+                }
+
+                // Create star group
+                this.starGroup = this.add.group({
+                    key: 'star',
+                    repeat: 500,
+                    setXY: { x: 0, y: 0, stepX: 8, stepY: 6 }
+                });
+
+                this.starGroup.children.iterate(function (star) {
+                    star.setX(Phaser.Math.Between(0, 4000));
+                    star.setY(Phaser.Math.Between(0, 4000));
+                    star.setAlpha(Phaser.Math.FloatBetween(0.2, 1));
+                });
+            }
+
+            spawnEnemies(level) {
+                const enemyCount = 5 + level * 2;
+                for (let i = 0; i < enemyCount; i++) {
+                    const x = Phaser.Math.Between(100, 3900);
+                    const y = Phaser.Math.Between(100, 3900);
+                    const enemy = this.enemies.get(x, y, 'enemy');
+                    if (enemy) {
+                        enemy.setActive(true);
+                        enemy.setVisible(true);
+                        enemy.initialize(this.player);
+                    }
+                }
+            }
+
+            spawnAsteroids(level) {
+                const asteroidCount = 10 + level * 3;
+                for (let i = 0; i < asteroidCount; i++) {
+                    const size = Phaser.Math.Between(1, 3); // 1: Large, 2: Medium, 3: Small
+                    const x = Phaser.Math.Between(100, 3900);
+                    const y = Phaser.Math.Between(100, 3900);
+                    const asteroid = this.asteroids.get(x, y, `asteroid_${size}`);
+                    if (asteroid) {
+                        asteroid.setActive(true);
+                        asteroid.setVisible(true);
+                        asteroid.initialize(size);
+                    }
+                }
+            }
+
+            spawnPowerUps() {
+                // **Define Map Corners**
+                const mapWidth = 4000;
+                const mapHeight = 4000;
+                const corners = [
+                    { x: 50, y: 50 },                     // Top-Left
+                    { x: mapWidth - 50, y: 50 },          // Top-Right
+                    { x: 50, y: mapHeight - 50 },         // Bottom-Left
+                    { x: mapWidth - 50, y: mapHeight - 50 } // Bottom-Right
+                ];
+
+                // **Power-Up Types**
+                const powerUpTypes = ['shield', 'fire_rate', 'invisibility', 'warp'];
+
+                // **Instantiate Power-Ups at Corners**
+                corners.forEach((corner, index) => {
+                    const type = powerUpTypes[index % powerUpTypes.length];
+                    const powerUp = this.powerUps.get(corner.x, corner.y, type);
+                    if (powerUp) {
+                        powerUp.setActive(true);
+                        powerUp.setVisible(true);
+                        powerUp.type = type;
+                        console.log(`Power-Up '${type}' spawned at (${corner.x}, ${corner.y})`);
+                    }
+                });
+            }
+
+            createUI() {
+                this.scoreText = this.add.text(16, 16, 'Score: 0', {
+                    fontSize: '20px',
+                    fill: '#ffffff'
+                }).setScrollFactor(0);
+
+                this.levelText = this.add.text(16, 40, 'Level: 1', {
+                    fontSize: '20px',
+                    fill: '#ffffff'
+                }).setScrollFactor(0);
+
+                // **Health Bar**
+                this.healthBar = this.add.graphics();
+                this.healthBar.fillStyle(0xff0000, 1);
+                this.healthBar.fillRect(16, 70, 100, 20); // x, y, width, height
+                this.healthBar.setScrollFactor(0);
+            }
+
+            updateHealthBar() {
+                const healthPercentage = Phaser.Math.Clamp(this.player.health / 3, 0, 1);
+                this.healthBar.clear();
+                this.healthBar.fillStyle(0xff0000, 1);
+                this.healthBar.fillRect(16, 70, 100 * healthPercentage, 20);
+            }
+
+            handleBulletEnemyCollision(bullet, enemy) {
+                bullet.disableBullet(); // Use the Bullet class's method
+                enemy.takeDamage(1);
+                this.score += 50; // Adjust score increment as desired
+                this.scoreText.setText('Score: ' + this.score);
+
+                // Play explosion sound
+                this.sound.play('explosion');
+
+                // Optional: Add visual feedback (e.g., flash the screen)
+                // this.cameras.main.flash(100, 255, 255, 255);
+            }
+
+            handleBulletAsteroidCollision(bullet, asteroid) {
+                bullet.disableBullet(); // Deactivate the bullet
+                asteroid.takeDamage(1); // Apply damage to the asteroid
+                this.score += 30; // Adjust score increment as desired
+                this.scoreText.setText('Score: ' + this.score);
+
+                // Play explosion sound
+                this.sound.play('explosion');
+
+                // Optional: Add visual feedback (e.g., flash)
+                // this.cameras.main.flash(100, 255, 255, 255);
+            }
+
+            handlePlayerEnemyCollision(playerSprite, enemy) {
+                // **Check if Shield is Active**
+                if (this.player.shieldActive) {
+                    console.log('Shield absorbed enemy collision');
+                } else {
+                    this.player.takeDamage(1);
+                }
+
+                enemy.takeDamage(1);
+
+                // Play collision sound
+                this.sound.play('collision');
+
+                // Optional: Add visual feedback (e.g., flash)
+                // this.cameras.main.flash(100, 255, 0, 0);
+
+                // **Check for Game Over**
+                if (this.player.health <= 0) {
+                    this.gameOver();
+                }
+
+                // **Update Health Bar**
+                this.updateHealthBar();
+            }
+
+            handlePlayerAsteroidCollision(playerSprite, asteroid) {
+                // **Check if Shield is Active**
+                if (this.player.shieldActive) {
+                    console.log('Shield absorbed asteroid collision');
+                } else {
+                    this.player.takeDamage(1);
+                }
+
+                asteroid.takeDamage(1);
+
+                // Play collision sound
+                this.sound.play('collision');
+
+                // Optional: Add visual feedback (e.g., flash)
+                // this.cameras.main.flash(100, 255, 0, 0);
+
+                // **Check for Game Over**
+                if (this.player.health <= 0) {
+                    this.gameOver();
+                }
+
+                // **Update Health Bar**
+                this.updateHealthBar();
+            }
+
+            handlePowerUpCollision(player, powerUp) {
+                // **Apply Power-Up Effect Based on Type**
+                switch (powerUp.type) {
+                    case 'shield':
+                        this.activateShield();
+                        break;
+                    case 'fire_rate':
+                        this.activateFireRateBooster();
+                        break;
+                    case 'invisibility':
+                        this.activateInvisibilityCloak();
+                        break;
+                    case 'warp':
+                        this.activateWarp();
+                        break;
+                    default:
+                        console.warn('Unknown Power-Up Type:', powerUp.type);
+                }
+
+                // **Deactivate and Hide the Power-Up**
+                powerUp.disableBody(true, true);
+
+                // **Play Power-Up Sound**
+                this.sound.play('powerup');
+
+                // **Log the Collection**
+                console.log(`Player collected '${powerUp.type}' power-up`);
+            }
+
+            activateShield() {
+                if (this.player.shieldActive) return; // Prevent stacking shields
+
+                this.player.shieldActive = true;
+                this.player.sprite.setTint(0x00ff00); // Green tint to indicate shield
+
+                // **Set Timer to Deactivate Shield After Duration**
+                this.time.delayedCall(5000, () => { // Shield lasts for 5 seconds
+                    this.player.shieldActive = false;
+                    this.player.sprite.clearTint();
+                });
+
+                // **Play Shield Activation Sound**
+                this.sound.play('shield');
+
+                console.log('Shield Activated');
+            }
+
+            activateFireRateBooster() {
+                if (this.player.fireRateBoosterActive) return; // Prevent stacking shields
+
+                this.player.fireRateBoosterActive = true;
+                this.player.fireRate /= 2; // Double the fire rate (half the cooldown)
+
+                // **Set Timer to Deactivate Fire Rate Booster After Duration**
+                this.time.delayedCall(5000, () => { // Booster lasts for 5 seconds
+                    this.player.fireRateBoosterActive = false;
+                    this.player.fireRate *= 2; // Reset to original fire rate
+                });
+
+                // **Play Fire Rate Booster Sound**
+                this.sound.play('fire_rate_booster');
+
+                console.log('Fire Rate Booster Activated');
+            }
+
+            activateInvisibilityCloak() {
+                if (this.player.invisibilityActive) return; // Prevent stacking
+
+                this.player.invisibilityActive = true;
+                this.player.sprite.setTint(0x0000ff); // Blue tint
+                this.player.sprite.alpha = 0.5; // Semi-transparent
+
+                // **Set Timer to Deactivate Invisibility After Duration**
+                this.time.delayedCall(5000, () => { // Invisibility lasts for 5 seconds
+                    this.player.invisibilityActive = false;
+                    this.player.sprite.clearTint();
+                    this.player.sprite.alpha = 1; // Reset opacity
+                });
+
+                // **Play Invisibility Activation Sound**
+                this.sound.play('invisibility');
+
+                console.log('Invisibility Cloak Activated');
+            }
+
+            activateWarp() {
+                // **Define Safe Areas or Calculate Safe Location**
+                const safeAreas = [
+                    { x: 2000, y: 2000 },
+                    { x: 1000, y: 1000 },
+                    { x: 3000, y: 3000 },
+                    { x: 2500, y: 3500 }
+                ];
+
+                // **Select a Random Safe Area**
+                const randomIndex = Phaser.Math.Between(0, safeAreas.length - 1);
+                const selectedSafeArea = safeAreas[randomIndex];
+
+                // **Teleport Player**
+                this.player.sprite.setPosition(selectedSafeArea.x, selectedSafeArea.y);
+
+                // **Play Warp Sound and Visual Feedback**
+                this.sound.play('warp');
+                this.cameras.main.flash(300, 0, 0, 255); // Blue flash
+
+                console.log(`Player warped to (${selectedSafeArea.x}, ${selectedSafeArea.y})`);
+            }
+
+            levelUp() {
+                this.level += 1;
+                this.levelText.setText('Level: ' + this.level);
+
+                // Spawn next level enemies and asteroids
+                this.spawnEnemies(this.level);
+                this.spawnAsteroids(this.level);
+                this.spawnPowerUps(); // Optionally spawn more power-ups
+
+                // Optionally, provide player upgrades
+                this.provideUpgrades();
+
+                console.log(`Level Up! Now at Level ${this.level}`);
+            }
+
+            provideUpgrades() {
+                // Implement upgrade logic (e.g., increase player health, add weapons)
+                // For example:
+                this.player.upgradeWeapon();
+            }
+
+            gameOver() {
+                this.scene.start('GameOverScene', { score: this.score });
+            }
+
+            createEnvironmentalHazards() {
+                // Placeholder for environmental hazards like dust storms, fog, etc.
+                // Implement specific hazards based on the level or celestial body
+                // Example: Create a dust storm effect
+                this.hazards = this.add.group();
+
+                // Example: Mars dust storm at Level 2
+                if (this.level === 2) {
+                    const storm = this.add.rectangle(2000, 2000, 4000, 4000, 0x888888, 0.1);
+                    this.hazards.add(storm);
+                }
+
+                // Add more hazards as needed
+            }
+
+            updateEnvironmentalHazards() {
+                // Implement effects of environmental hazards
+                // For example, reduce player speed, affect visibility, etc.
+                // This is a placeholder for future implementation
+            }
+        }
+
+        // ====================
+        // Game Over Scene
+        // ====================
+        class GameOverScene extends Phaser.Scene {
+            constructor() {
+                super({ key: 'GameOverScene' });
+            }
+
+            init(data) {
+                this.finalScore = data.score;
+            }
+
+            create() {
+                // Create background
+                this.cameras.main.setBackgroundColor('#000');
+
+                // Game Over Text
+                this.add.text(this.scale.width / 2, this.scale.height / 2 - 100, 'Game Over', {
+                    fontSize: '48px',
+                    fill: '#ff0000'
+                }).setOrigin(0.5);
+
+                // Final Score
+                this.add.text(this.scale.width / 2, this.scale.height / 2, `Score: ${this.finalScore}`, {
+                    fontSize: '32px',
+                    fill: '#ffffff'
+                }).setOrigin(0.5);
+
+                // Restart Instruction
+                this.add.text(this.scale.width / 2, this.scale.height / 2 + 100, 'Press SPACE to Restart', {
+                    fontSize: '24px',
+                    fill: '#ffffff'
+                }).setOrigin(0.5);
+
+                // Input
+                this.spaceBar = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+            }
+
+            update(time, delta) {
+                if (Phaser.Input.Keyboard.JustDown(this.spaceBar)) {
+                    this.scene.start('GameScene');
+                }
+            }
+        }
+
+        // ====================
+        // Phaser Game Configuration
+        // ====================
+        const config = {
+            type: Phaser.AUTO,
+            width: 800, // Viewport width
+            height: 600, // Viewport height
+            parent: 'game-container',
+            physics: {
+                default: 'arcade',
+                arcade: {
+                    gravity: { y: 0 }, // No gravity for shooter
+                    debug: false, // Set to true for debugging
+                }
+            },
+            scene: [StartScene, GameScene, GameOverScene],
+            scale: {
+                mode: Phaser.Scale.FIT,
+                autoCenter: Phaser.Scale.CENTER_BOTH
+            }
+        };
+
+        // Initialize the game
+        const game = new Phaser.Game(config);
+    </script>
+</body>
+</html>
