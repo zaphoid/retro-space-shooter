@@ -31,6 +31,7 @@
                 // Load assets
                 this.load.image('player', 'assets/player.png');
                 this.load.image('enemy', 'assets/enemy.png');
+                this.load.image('boss', 'assets/boss.png'); // New Boss Asset
                 this.load.image('asteroid_large', 'assets/asteroid_large.png');
                 this.load.image('asteroid_medium', 'assets/asteroid_medium.png');
                 this.load.image('asteroid_small', 'assets/asteroid_small.png');
@@ -43,6 +44,8 @@
                 this.load.audio('invisibility', 'assets/sounds/invisibility.wav'); // Added
                 this.load.audio('warp', 'assets/sounds/warp.wav');         // Added
                 this.load.audio('collision', 'assets/sounds/collision.wav'); // Added
+                this.load.audio('boss_theme', 'assets/sounds/boss_theme.wav'); // New Boss Theme
+                this.load.audio('level_up', 'assets/sounds/level_up.wav'); // New Level Up Sound
 
                 // Create a simple star texture if not already created
                 if (!this.textures.exists('star')) {
@@ -229,10 +232,10 @@
             constructor(scene, x, y, texture) {
                 this.scene = scene;
                 this.sprite = scene.physics.add.sprite(x, y, texture);
-                this.sprite.setScale(1.5);
+                this.sprite.setScale(0.5);
                 this.sprite.setCollideWorldBounds(true);
                 this.sprite.setDamping(true);
-                this.sprite.setDrag(0.99);
+                this.sprite.setDrag(0.98);
                 this.sprite.setAngularDrag(400);
                 this.sprite.setMaxVelocity(300);
                 this.sprite.setOrigin(0.5, 0.5);
@@ -247,9 +250,9 @@
                 this.invisibilityActive = false;
                 
                 // **Initialize Firing Variables**
-                this.fireRate = 500; // Time between shots in milliseconds
+                this.fireRate = 250; // Time between shots in milliseconds
                 this.lastFired = 0;   // Timestamp of the last fired bullet
-                this.bulletSpeed = 300; // Speed of the bullet in pixels per second
+                this.bulletSpeed = 600; // Speed of the bullet in pixels per second
 
                 // Input
                 this.keyW = scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.W);
@@ -315,14 +318,20 @@
             }
 
             takeDamage(amount) {
-                if (this.shieldActive) {
-                    console.log('Shield absorbed damage');
-                    return; // Shield absorbs damage
-                }
-
                 this.health -= amount;
-                console.log(`Player took damage. Health: ${this.health}`);
+                console.log(`Enemy took damage. Health: ${this.health}`);
+                if (this.health <= 0) {
+                    this.sprite.setActive(false);
+                    this.sprite.setVisible(false);
+
+                    this.body.stop(); // Stop any ongoing movement
+                    this.body.reset(0, 0); // Reset position to origin
+                    this.scene.score += 50; // Increment score
+                    this.scene.scoreText.setText('Score: ' + this.scene.score);
+                    console.log('Enemy destroyed');
+                }
             }
+
 
             upgradeWeapon() {
                 this.weaponLevel += 1;
@@ -348,36 +357,120 @@
                 this.target = player;
                 this.setActive(true);
                 this.setVisible(true);
+                this.scoreIncremented = false;
+
                 this.setVelocity(0, 0);
+                this.health = 1; // Reset health
+                console.log(`Enemy initialized with health: ${this.health}`);
             }
 
             update(time, delta) {
                 if (this.target) {
-                    // **Check if Player is Invisible**
                     if (this.target.invisibilityActive) {
-                        // Stop tracking
                         this.setVelocity(0, 0);
                     } else {
-                        // Normal behavior: Move towards the player
                         this.scene.physics.moveToObject(this, this.target.sprite, this.speed);
                     }
                 }
             }
 
             takeDamage(amount) {
+                if (!this.active) return; // Prevent processing if already inactive
+
                 this.health -= amount;
-                console.log(`Enemy took damage. Health: ${this.health}`);
                 if (this.health <= 0) {
-                    this.disableBody(true, true); // Deactivate and hide the enemy
-                    this.scene.score += 50; // Increment score
-                    this.scene.scoreText.setText('Score: ' + this.scene.score);
+                    if (!this.scoreIncremented) {  // Add this flag
+                        this.scene.score += 50;    // Increment score
+                        this.scene.scoreText.setText('Score: ' + this.scene.score);
+                        this.scoreIncremented = true;  // Set flag to prevent re-incrementing
+                    }
+                    this.disableBody(true, true);
                     console.log('Enemy destroyed');
                 }
             }
         }
 
+
         // ====================
-        // Asteroid Class
+        // BossEnemy Class (New)
+        // ====================
+        class BossEnemy extends Phaser.Physics.Arcade.Sprite {
+            constructor(scene, x, y, texture) {
+                super(scene, x, y, texture);
+                scene.add.existing(this);
+                scene.physics.add.existing(this);
+
+                this.health = 20; // Higher health for boss
+                this.speed = 80;
+                this.target = null;
+                this.phase = 1;
+                this.lastAttack = 0;
+                this.attackCooldown = 2000; // Time between attacks in milliseconds
+            }
+
+            initialize(player) {
+                this.target = player;
+                this.setActive(true);
+                this.setVisible(true);
+                this.setVelocity(0, 0);
+                this.setScale(1.5); // Larger size for boss
+            }
+
+            update(time, delta) {
+                if (this.target) {
+                    // **Move in a pattern (e.g., circular or back and forth)**
+                    const distance = Phaser.Math.Distance.Between(this.x, this.y, this.target.sprite.x, this.target.sprite.y);
+                    if (distance > 300) {
+                        this.scene.physics.moveToObject(this, this.target.sprite, this.speed);
+                    } else {
+                        this.setVelocity(0, 0);
+                    }
+
+                    // **Boss Attack Patterns**
+                    if (time > this.lastAttack) {
+                        this.performAttack();
+                        this.lastAttack = time + this.attackCooldown;
+                    }
+                }
+            }
+
+            performAttack() {
+                // Example: Boss fires multiple bullets in spread
+                const bulletCount = 8;
+                const angleStep = Phaser.Math.PI2 / bulletCount;
+                for (let i = 0; i < bulletCount; i++) {
+                    const angle = i * angleStep;
+                    const bullet = this.scene.bullets.get(this.x, this.y, 'bullet');
+                    if (bullet) {
+                        bullet.fire(this.x, this.y, angle, 400);
+                    }
+                }
+                // Play boss attack sound
+                this.scene.sound.play('shoot');
+                console.log('Boss performed a spread attack');
+            }
+
+            takeDamage(amount) {
+                this.health -= amount;
+                console.log(`Boss Enemy took damage. Health: ${this.health}`);
+                if (this.health <= 0) {
+                    this.setActive(false);
+                    this.setVisible(false);
+                    this.body.stop(); // Stop any ongoing movement
+                    this.body.reset(0, 0); // Reset position to origin
+                    this.scene.score += 500; // Higher score for boss
+                    this.scene.scoreText.setText('Score: ' + this.scene.score);
+                    console.log('Boss Enemy destroyed');
+                    
+                    // **Reset hasBoss Flag**
+                    this.scene.hasBoss = false;
+                }
+            }
+
+        }
+
+        // ====================
+        // Asteroid Class (Refactored with Wrapping)
         // ====================
         class Asteroid extends Phaser.Physics.Arcade.Sprite {
             constructor(scene, x, y, texture) {
@@ -385,65 +478,142 @@
                 scene.add.existing(this);
                 scene.physics.add.existing(this);
 
+                // Initialize default properties
                 this.size = 1; // 1: Large, 2: Medium, 3: Small
                 this.health = 3;
                 this.speed = Phaser.Math.FloatBetween(50, 150);
                 this.rotationSpeed = Phaser.Math.FloatBetween(-100, 100);
                 this.setAngularVelocity(this.rotationSpeed);
+
+                // **Remove World Bounds Collision**
+                // this.setCollideWorldBounds(true);
+                // this.body.onWorldBounds = true;
+
+                // **Remove World Bounds Event Listener**
+                // this.scene.physics.world.on('worldbounds', this.handleWorldBounds, this);
             }
 
+            /**
+             * Initializes the asteroid based on its size.
+             * @param {number} size - The size category of the asteroid (1: Large, 2: Medium, 3: Small).
+             */
             initialize(size) {
                 this.size = size;
                 switch (size) {
                     case 1:
                         this.setTexture('asteroid_large');
                         this.health = 3;
+                        this.setScale(1.0);
                         break;
                     case 2:
                         this.setTexture('asteroid_medium');
                         this.health = 2;
+                        this.setScale(0.7);
                         break;
                     case 3:
                         this.setTexture('asteroid_small');
                         this.health = 1;
+                        this.setScale(0.4);
                         break;
+                    default:
+                        console.warn(`Unknown asteroid size: ${size}. Defaulting to Large.`);
+                        this.setTexture('asteroid_large');
+                        this.health = 3;
+                        this.setScale(1.0);
                 }
+
+                // Randomize rotation speed for variety
+                this.rotationSpeed = Phaser.Math.FloatBetween(-100, 100);
+                this.setAngularVelocity(this.rotationSpeed);
 
                 // Set random velocity
                 const angle = Phaser.Math.FloatBetween(0, 2 * Math.PI);
                 this.setVelocity(Math.cos(angle) * this.speed, Math.sin(angle) * this.speed);
             }
 
+            /**
+             * Updates the asteroid each frame.
+             * Checks if the asteroid is off-screen and wraps it to the opposite side if necessary.
+             * @param {number} time - The current time.
+             * @param {number} delta - The time elapsed since the last frame.
+             */
             update(time, delta) {
-                // Handle asteroid movement and rotation if needed
-            }
+                // **Implement Wrapping Around the Game World**
+                const worldWidth = this.scene.physics.world.bounds.width;
+                const worldHeight = this.scene.physics.world.bounds.height;
 
-            takeDamage(amount) {
-                this.health -= amount;
-                console.log(`Asteroid took damage. Health: ${this.health}`);
-                if (this.health <= 0) {
-                    this.split();
-                    this.disableBody(true, true); // Deactivate and hide the asteroid
-                    this.scene.score += 30; // Increment score
-                    this.scene.scoreText.setText('Score: ' + this.scene.score);
-                    console.log('Asteroid destroyed');
+                if (this.x < 0) {
+                    this.x = worldWidth;
+                } else if (this.x > worldWidth) {
+                    this.x = 0;
+                }
+
+                if (this.y < 0) {
+                    this.y = worldHeight;
+                } else if (this.y > worldHeight) {
+                    this.y = 0;
                 }
             }
 
+            /**
+             * Handles damage taken by the asteroid.
+             * @param {number} amount - The amount of damage to apply.
+             */
+            takeDamage(amount) {
+                if (!this.active) return; // Prevent processing if already inactive
+
+                this.health -= amount;
+                console.log(`Asteroid took damage. Health: ${this.health}`);
+
+                if (this.health <= 0) {
+                    this.split();
+                    this.disableAsteroid();
+                }
+            }
+
+            /**
+             * Splits the asteroid into smaller asteroids if it's not already the smallest size.
+             */
             split() {
-                if (this.size >= 3) return; // Smallest size
+                if (this.size >= 3) return; // Smallest size does not split
 
                 const newSize = this.size + 1;
-                for (let i = 0; i < 2; i++) {
+                const numberOfSplits = 2; // Number of smaller asteroids to spawn
+
+                for (let i = 0; i < numberOfSplits; i++) {
                     const asteroid = this.scene.asteroids.get(this.x, this.y, `asteroid_${newSize}`);
                     if (asteroid) {
-                        asteroid.setActive(true);
-                        asteroid.setVisible(true);
-                        asteroid.initialize(newSize);
-                        console.log(`Asteroid split into size ${newSize}`);
+                        // Ensure the new asteroid does not overlap the player or other objects
+                        if (Phaser.Math.Distance.Between(asteroid.x, asteroid.y, this.scene.player.sprite.x, this.scene.player.sprite.y) > 100) {
+                            asteroid.setActive(true);
+                            asteroid.setVisible(true);
+                            asteroid.initialize(newSize);
+                            console.log(`Asteroid split into size ${newSize} at (${asteroid.x}, ${asteroid.y})`);
+                        } else {
+                            console.log('Split asteroid spawned too close to the player. Skipping.');
+                            asteroid.disableAsteroid();
+                        }
                     }
                 }
             }
+
+            /**
+             * Disables the asteroid by deactivating and hiding it.
+             */
+            disableAsteroid() {
+                this.setActive(false);
+                this.setVisible(false);
+                this.body.stop(); // Stop any ongoing movement
+                this.body.reset(0, 0); // Reset position to origin
+                /////////////////////////////////////////////////////
+                ///////////////////////////////////////////////////
+                this.scene.score += 30; // Increment score
+                this.scene.scoreText.setText('Score: ' + this.scene.score);
+                console.log('Asteroid destroyed and deactivated');
+            }
+
+
+
         }
 
         // ====================
@@ -462,12 +632,15 @@
                 // **Initialize variables**
                 this.score = 0;
                 this.level = 1;
+                this.maxLevel = 20; // Define maximum level
+                this.hasBoss = false; // Initialize hasBoss flag
 
                 // Set world bounds
                 this.physics.world.setBounds(0, 0, 4000, 4000);
 
                 // Create starfield
                 this.createStarfield();
+            
 
                 // Create player
                 this.player = new Player(this, 2000, 2000, 'player');
@@ -479,9 +652,14 @@
                     maxSize: 100 // Increased maxSize for more bullets
                 });
 
-                // Create enemy and asteroid groups
+                // Create enemy, boss, and asteroid groups
                 this.enemies = this.physics.add.group({
                     classType: Enemy,
+                    runChildUpdate: true
+                });
+
+                this.bosses = this.physics.add.group({
+                    classType: BossEnemy,
                     runChildUpdate: true
                 });
 
@@ -502,15 +680,20 @@
                 this.spawnAsteroids(this.level);
                 this.spawnPowerUps();
 
+                // **Spawn Boss if Applicable**
+                this.spawnBoss(this.level);
+
                 // Create UI
                 this.createUI();
 
                 // Set up collisions
                 this.physics.add.overlap(this.bullets, this.enemies, this.handleBulletEnemyCollision, null, this);
                 this.physics.add.overlap(this.bullets, this.asteroids, this.handleBulletAsteroidCollision, null, this);
+                this.physics.add.overlap(this.bullets, this.bosses, this.handleBulletBossCollision, null, this); // New Collision
                 this.physics.add.overlap(this.player.sprite, this.enemies, this.handlePlayerEnemyCollision, null, this);
                 this.physics.add.overlap(this.player.sprite, this.asteroids, this.handlePlayerAsteroidCollision, null, this);
                 this.physics.add.overlap(this.player.sprite, this.powerUps, this.handlePowerUpCollision, null, this);
+                this.physics.add.overlap(this.player.sprite, this.bosses, this.handlePlayerBossCollision, null, this); // New Collision
 
                 // Camera setup
                 this.cameras.main.setBounds(0, 0, 4000, 4000);
@@ -518,18 +701,42 @@
 
                 // Environmental Hazards
                 this.createEnvironmentalHazards();
+
+                // **Add Level Transition Variables**
+                this.isTransitioning = false;
+
+                // **Play Background Music**
+                this.playBackgroundMusic();
+            }
+            
+                addScore(points) {
+                this.score += points;
+                this.scoreText.setText('Score: ' + this.score);
             }
 
             update(time, delta) {
-                this.player.update();
+                if (!this.isTransitioning) {
+                    this.player.update();
 
-                // Check level progression
-                if (this.enemies.countActive() === 0 && this.asteroids.countActive() === 0) {
-                    this.levelUp();
+                    // **Debugging Logs (Optional)**
+                    // Uncomment the following lines to see active counts in the console
+                    /*
+                    console.log(`Enemies Active: ${this.enemies.countActive()}`);
+                    console.log(`Asteroids Active: ${this.asteroids.countActive()}`);
+                    console.log(`Bosses Active: ${this.bosses.countActive()}`);
+                    console.log(`Has Boss: ${this.hasBoss}`);
+                    */
+
+                    // **Adjust Level Progression Condition**
+                    // **Remove Asteroids from Level Progression**
+                    // Level up when all enemies and bosses are defeated
+                    if (this.enemies.countActive() === 0 && (!this.hasBoss || this.bosses.countActive() === 0)) {
+                        this.levelUp();
+                    }
+
+                    // Update environmental hazards
+                    this.updateEnvironmentalHazards();
                 }
-
-                // Update environmental hazards
-                this.updateEnvironmentalHazards();
             }
 
             createStarfield() {
@@ -563,10 +770,42 @@
                     const y = Phaser.Math.Between(100, 3900);
                     const enemy = this.enemies.get(x, y, 'enemy');
                     if (enemy) {
-                        enemy.setActive(true);
-                        enemy.setVisible(true);
-                        enemy.initialize(this.player);
+                        // Prevent spawning enemies too close to the player
+                        if (Phaser.Math.Distance.Between(x, y, this.player.sprite.x, this.player.sprite.y) > 100) {
+                            enemy.setActive(true);
+                            enemy.setVisible(true);
+                            enemy.initialize(this.player);
+                        } else {
+                            console.log('Enemy spawned too close to the player. Skipping.');
+                            enemy.disableBody(true, true);
+                        }
                     }
+                }
+                console.log(`Spawned ${enemyCount} enemies for Level ${level}`);
+            }
+
+            spawnBoss(level) {
+                // **Spawn a boss every 5 levels**
+                if (level % 5 === 0) {
+                    const x = Phaser.Math.Between(1000, 3000);
+                    const y = Phaser.Math.Between(1000, 3000);
+                    const boss = this.bosses.get(x, y, 'boss');
+                    if (boss) {
+                        // Prevent spawning boss too close to the player
+                        if (Phaser.Math.Distance.Between(x, y, this.player.sprite.x, this.player.sprite.y) > 200) {
+                            boss.setActive(true);
+                            boss.setVisible(true);
+                            boss.initialize(this.player);
+                            console.log(`Boss spawned at (${x}, ${y}) for Level ${level}`);
+                            this.hasBoss = true; // Set hasBoss to true when a boss is spawned
+                        } else {
+                            console.log('Boss spawned too close to the player. Skipping.');
+                            boss.disableBody(true, true);
+                            this.hasBoss = false;
+                        }
+                    }
+                } else {
+                    this.hasBoss = false; // Ensure hasBoss is false when no boss is present
                 }
             }
 
@@ -578,11 +817,18 @@
                     const y = Phaser.Math.Between(100, 3900);
                     const asteroid = this.asteroids.get(x, y, `asteroid_${size}`);
                     if (asteroid) {
-                        asteroid.setActive(true);
-                        asteroid.setVisible(true);
-                        asteroid.initialize(size);
+                        // Prevent spawning asteroids too close to the player
+                        if (Phaser.Math.Distance.Between(x, y, this.player.sprite.x, this.player.sprite.y) > 100) {
+                            asteroid.setActive(true);
+                            asteroid.setVisible(true);
+                            asteroid.initialize(size);
+                        } else {
+                            console.log('Asteroid spawned too close to the player. Skipping.');
+                            asteroid.disableAsteroid();
+                        }
                     }
                 }
+                console.log(`Spawned ${asteroidCount} asteroids for Level ${level}`);
             }
 
             spawnPowerUps() {
@@ -604,10 +850,16 @@
                     const type = powerUpTypes[index % powerUpTypes.length];
                     const powerUp = this.powerUps.get(corner.x, corner.y, type);
                     if (powerUp) {
-                        powerUp.setActive(true);
-                        powerUp.setVisible(true);
-                        powerUp.type = type;
-                        console.log(`Power-Up '${type}' spawned at (${corner.x}, ${corner.y})`);
+                        // Prevent spawning power-ups too close to the player
+                        if (Phaser.Math.Distance.Between(corner.x, corner.y, this.player.sprite.x, this.player.sprite.y) > 100) {
+                            powerUp.setActive(true);
+                            powerUp.setVisible(true);
+                            powerUp.type = type;
+                            console.log(`Power-Up '${type}' spawned at (${corner.x}, ${corner.y})`);
+                        } else {
+                            console.log('Power-Up spawned too close to the player. Skipping.');
+                            powerUp.disableBody(true, true);
+                        }
                     }
                 });
             }
@@ -638,108 +890,136 @@
             }
 
             handleBulletEnemyCollision(bullet, enemy) {
-                bullet.disableBullet(); // Use the Bullet class's method
-                enemy.takeDamage(1);
-                this.score += 50; // Adjust score increment as desired
-                this.scoreText.setText('Score: ' + this.score);
-
-                // Play explosion sound
-                this.sound.play('explosion');
-
-                // Optional: Add visual feedback (e.g., flash the screen)
-                // this.cameras.main.flash(100, 255, 255, 255);
+                if (enemy instanceof Enemy) {
+                    bullet.disableBullet(); // Deactivate the bullet
+                    if (enemy.active) {
+                        enemy.takeDamage(1); // Apply damage to the enemy
+                        this.sound.play('explosion');
+                    }
+                }
             }
 
             handleBulletAsteroidCollision(bullet, asteroid) {
-                bullet.disableBullet(); // Deactivate the bullet
-                asteroid.takeDamage(1); // Apply damage to the asteroid
-                this.score += 30; // Adjust score increment as desired
-                this.scoreText.setText('Score: ' + this.score);
+                if (asteroid instanceof Asteroid) {
+                    bullet.disableBullet(); // Deactivate the bullet
+                    asteroid.takeDamage(1); // Apply damage to the asteroid
 
-                // Play explosion sound
-                this.sound.play('explosion');
+                    // Play explosion sound
+                    this.sound.play('explosion');
+                }
+            }
 
-                // Optional: Add visual feedback (e.g., flash)
-                // this.cameras.main.flash(100, 255, 255, 255);
+            handleBulletBossCollision(bullet, boss) {
+                if (boss instanceof BossEnemy) {
+                    bullet.disableBullet(); // Deactivate the bullet
+                    boss.takeDamage(1); // Apply damage to the boss
+
+                    // Play explosion sound
+                    this.sound.play('explosion');
+                }
             }
 
             handlePlayerEnemyCollision(playerSprite, enemy) {
-                // **Check if Shield is Active**
-                if (this.player.shieldActive) {
-                    console.log('Shield absorbed enemy collision');
-                } else {
-                    this.player.takeDamage(1);
+                if (enemy instanceof Enemy) {
+                    // **Check if Shield is Active**
+                    if (this.player.shieldActive) {
+                        console.log('Shield absorbed enemy collision');
+                    } else {
+                        this.player.takeDamage(1);
+                    }
+
+                    enemy.takeDamage(1);
+
+                    // Play collision sound
+                    this.sound.play('collision');
+
+                    // **Check for Game Over**
+                    if (this.player.health <= 0) {
+                        this.gameOver();
+                    }
+
+                    // **Update Health Bar**
+                    this.updateHealthBar();
                 }
-
-                enemy.takeDamage(1);
-
-                // Play collision sound
-                this.sound.play('collision');
-
-                // Optional: Add visual feedback (e.g., flash)
-                // this.cameras.main.flash(100, 255, 0, 0);
-
-                // **Check for Game Over**
-                if (this.player.health <= 0) {
-                    this.gameOver();
-                }
-
-                // **Update Health Bar**
-                this.updateHealthBar();
             }
 
             handlePlayerAsteroidCollision(playerSprite, asteroid) {
-                // **Check if Shield is Active**
-                if (this.player.shieldActive) {
-                    console.log('Shield absorbed asteroid collision');
-                } else {
-                    this.player.takeDamage(1);
+                if (asteroid instanceof Asteroid) {
+                    // **Check if Shield is Active**
+                    if (this.player.shieldActive) {
+                        console.log('Shield absorbed asteroid collision');
+                    } else {
+                        this.player.takeDamage(1);
+                    }
+
+                    asteroid.takeDamage(1);
+
+                    // Play collision sound
+                    this.sound.play('collision');
+
+                    // **Check for Game Over**
+                    if (this.player.health <= 0) {
+                        this.gameOver();
+                    }
+
+                    // **Update Health Bar**
+                    this.updateHealthBar();
                 }
+            }
 
-                asteroid.takeDamage(1);
+            handlePlayerBossCollision(playerSprite, boss) {
+                if (boss instanceof BossEnemy) {
+                    // **Check if Shield is Active**
+                    if (this.player.shieldActive) {
+                        console.log('Shield absorbed boss collision');
+                    } else {
+                        this.player.takeDamage(2); // More damage from boss
+                    }
 
-                // Play collision sound
-                this.sound.play('collision');
+                    boss.takeDamage(2); // Damage to boss upon collision
 
-                // Optional: Add visual feedback (e.g., flash)
-                // this.cameras.main.flash(100, 255, 0, 0);
+                    // Play collision sound
+                    this.sound.play('collision');
 
-                // **Check for Game Over**
-                if (this.player.health <= 0) {
-                    this.gameOver();
+                    // **Check for Game Over**
+                    if (this.player.health <= 0) {
+                        this.gameOver();
+                    }
+
+                    // **Update Health Bar**
+                    this.updateHealthBar();
                 }
-
-                // **Update Health Bar**
-                this.updateHealthBar();
             }
 
             handlePowerUpCollision(player, powerUp) {
-                // **Apply Power-Up Effect Based on Type**
-                switch (powerUp.type) {
-                    case 'shield':
-                        this.activateShield();
-                        break;
-                    case 'fire_rate':
-                        this.activateFireRateBooster();
-                        break;
-                    case 'invisibility':
-                        this.activateInvisibilityCloak();
-                        break;
-                    case 'warp':
-                        this.activateWarp();
-                        break;
-                    default:
-                        console.warn('Unknown Power-Up Type:', powerUp.type);
+                if (powerUp instanceof PowerUp) {
+                    // **Apply Power-Up Effect Based on Type**
+                    switch (powerUp.type) {
+                        case 'shield':
+                            this.activateShield();
+                            break;
+                        case 'fire_rate':
+                            this.activateFireRateBooster();
+                            break;
+                        case 'invisibility':
+                            this.activateInvisibilityCloak();
+                            break;
+                        case 'warp':
+                            this.activateWarp();
+                            break;
+                        default:
+                            console.warn('Unknown Power-Up Type:', powerUp.type);
+                    }
+
+                    // **Deactivate and Hide the Power-Up**
+                    powerUp.disableBody(true, true);
+
+                    // **Play Power-Up Sound**
+                    this.sound.play('powerup');
+
+                    // **Log the Collection**
+                    console.log(`Player collected '${powerUp.type}' power-up`);
                 }
-
-                // **Deactivate and Hide the Power-Up**
-                powerUp.disableBody(true, true);
-
-                // **Play Power-Up Sound**
-                this.sound.play('powerup');
-
-                // **Log the Collection**
-                console.log(`Player collected '${powerUp.type}' power-up`);
             }
 
             activateShield() {
@@ -761,7 +1041,7 @@
             }
 
             activateFireRateBooster() {
-                if (this.player.fireRateBoosterActive) return; // Prevent stacking shields
+                if (this.player.fireRateBoosterActive) return; // Prevent stacking boosters
 
                 this.player.fireRateBoosterActive = true;
                 this.player.fireRate /= 2; // Double the fire rate (half the cooldown)
@@ -822,18 +1102,47 @@
             }
 
             levelUp() {
+                if (this.level >= this.maxLevel) {
+                    this.victory();
+                    return;
+                }
+
                 this.level += 1;
                 this.levelText.setText('Level: ' + this.level);
+                this.isTransitioning = true;
 
-                // Spawn next level enemies and asteroids
-                this.spawnEnemies(this.level);
-                this.spawnAsteroids(this.level);
-                this.spawnPowerUps(); // Optionally spawn more power-ups
+                // **Play Level Up Sound**
+                this.sound.play('level_up');
 
-                // Optionally, provide player upgrades
-                this.provideUpgrades();
+                // **Display Level Transition Screen**
+                const transitionText = this.add.text(this.cameras.main.midPoint.x, this.cameras.main.midPoint.y, `Level ${this.level}`, {
+                    fontSize: '64px',
+                    fill: '#ffffff'
+                }).setOrigin(0.5).setDepth(1000);
 
-                console.log(`Level Up! Now at Level ${this.level}`);
+                // **Fade Out and In Transition**
+                this.cameras.main.fadeOut(1000, 0, 0, 0);
+                this.time.delayedCall(1000, () => {
+                    // Remove transition text
+                    transitionText.destroy();
+
+                    // Spawn next level enemies and asteroids
+                    this.spawnEnemies(this.level);
+                    this.spawnAsteroids(this.level);
+                    this.spawnPowerUps();
+
+                    // **Spawn Boss if Applicable**
+                    this.spawnBoss(this.level);
+
+                    // Optionally, provide player upgrades
+                    this.provideUpgrades();
+
+                    // Fade In
+                    this.cameras.main.fadeIn(1000, 0, 0, 0);
+                    this.isTransitioning = false;
+
+                    console.log(`Level Up! Now at Level ${this.level}`);
+                });
             }
 
             provideUpgrades() {
@@ -843,7 +1152,21 @@
             }
 
             gameOver() {
+                // **Stop Background Music**
+                if (this.backgroundMusic) {
+                    this.backgroundMusic.stop();
+                }
+
                 this.scene.start('GameOverScene', { score: this.score });
+            }
+
+            victory() {
+                // **Stop Background Music**
+                if (this.backgroundMusic) {
+                    this.backgroundMusic.stop();
+                }
+
+                this.scene.start('VictoryScene', { score: this.score });
             }
 
             createEnvironmentalHazards() {
@@ -865,6 +1188,11 @@
                 // Implement effects of environmental hazards
                 // For example, reduce player speed, affect visibility, etc.
                 // This is a placeholder for future implementation
+            }
+
+            playBackgroundMusic() {
+                this.backgroundMusic = this.sound.add('boss_theme', { loop: true, volume: 0.5 });
+                this.backgroundMusic.play();
             }
         }
 
@@ -914,12 +1242,57 @@
         }
 
         // ====================
+        // Victory Scene (New)
+        // ====================
+        class VictoryScene extends Phaser.Scene {
+            constructor() {
+                super({ key: 'VictoryScene' });
+            }
+
+            init(data) {
+                this.finalScore = data.score;
+            }
+
+            create() {
+                // Create background
+                this.cameras.main.setBackgroundColor('#000');
+
+                // Victory Text
+                this.add.text(this.scale.width / 2, this.scale.height / 2 - 100, 'Victory!', {
+                    fontSize: '48px',
+                    fill: '#00ff00'
+                }).setOrigin(0.5);
+
+                // Final Score
+                this.add.text(this.scale.width / 2, this.scale.height / 2, `Final Score: ${this.finalScore}`, {
+                    fontSize: '32px',
+                    fill: '#ffffff'
+                }).setOrigin(0.5);
+
+                // Restart Instruction
+                this.add.text(this.scale.width / 2, this.scale.height / 2 + 100, 'Press SPACE to Play Again', {
+                    fontSize: '24px',
+                    fill: '#ffffff'
+                }).setOrigin(0.5);
+
+                // Input
+                this.spaceBar = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+            }
+
+            update(time, delta) {
+                if (Phaser.Input.Keyboard.JustDown(this.spaceBar)) {
+                    this.scene.start('GameScene');
+                }
+            }
+        }
+
+        // ====================
         // Phaser Game Configuration
         // ====================
         const config = {
             type: Phaser.AUTO,
-            width: 800, // Viewport width
-            height: 600, // Viewport height
+            width: 1300, // Viewport width
+            height: 800, // Viewport height
             parent: 'game-container',
             physics: {
                 default: 'arcade',
@@ -928,7 +1301,7 @@
                     debug: false, // Set to true for debugging
                 }
             },
-            scene: [StartScene, GameScene, GameOverScene],
+            scene: [StartScene, GameScene, GameOverScene, VictoryScene], // Added VictoryScene
             scale: {
                 mode: Phaser.Scale.FIT,
                 autoCenter: Phaser.Scale.CENTER_BOTH
