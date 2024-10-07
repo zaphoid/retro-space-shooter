@@ -319,18 +319,19 @@
 
             takeDamage(amount) {
                 this.health -= amount;
-                console.log(`Enemy took damage. Health: ${this.health}`);
+                console.log(`Player took damage. Health: ${this.health}`);
                 if (this.health <= 0) {
                     this.sprite.setActive(false);
                     this.sprite.setVisible(false);
 
-                    this.body.stop(); // Stop any ongoing movement
-                    this.body.reset(0, 0); // Reset position to origin
+                    this.sprite.body.stop(); // Correct reference
+                    this.sprite.body.reset(2000, 2000); // Reset to center or desired position
                     this.scene.score += 50; // Increment score
                     this.scene.scoreText.setText('Score: ' + this.scene.score);
-                    console.log('Enemy destroyed');
+                    console.log('Player destroyed');
                 }
             }
+
 
 
             upgradeWeapon() {
@@ -340,49 +341,344 @@
         }
 
         // ====================
-        // Enemy Class
+        // Enemy Class with Logic Tree Behaviors
         // ====================
         class Enemy extends Phaser.Physics.Arcade.Sprite {
             constructor(scene, x, y, texture) {
                 super(scene, x, y, texture);
+
+                // Add enemy to the scene and physics world
                 scene.add.existing(this);
                 scene.physics.add.existing(this);
 
-                this.health = 1;
+                // State machine properties
+                this.State = {
+                    IDLE: 'IDLE',
+                    PATROL: 'PATROL',
+                    ALERT: 'ALERT',
+                    CHASE: 'CHASE',
+                    ATTACK: 'ATTACK',
+                    FLEE: 'FLEE',
+                    SEARCH: 'SEARCH',
+                    REGENERATION: 'REGENERATION',
+                    STEALTH: 'STEALTH',
+                    // Add other states as needed
+                };
+
+                this.state = this.State.PATROL; // Starting state
+                this.player = null; // Reference to the player
+
+                // Enemy properties
+                this.health = 3;
+                this.maxHealth = 3;
                 this.speed = 100;
-                this.target = null;
+                this.detectionRange = 300;
+                this.attackRange = 150;
+
+                // State-specific properties
+                this.alertTimer = 0;
+                this.alertDuration = 5000; // 5 seconds
+                this.searchTimer = 0;
+                this.searchDuration = 5000; // 5 seconds
+                this.lastKnownPosition = null;
+                this.patrolPoints = [];
+                this.currentPatrolIndex = 0;
+
+                // Shooting properties
+                this.lastFired = 0;
+                this.fireRate = 1000; // Time between shots in milliseconds
+
+                // Stealth properties
+                this.isCloaked = false;
+                this.stealthTimer = 0;
+                this.stealthDuration = 5000; // 5 seconds
+
+                // Other properties
+                this.scoreIncremented = false;
+
+                // Enable physics body
+                this.body.setCollideWorldBounds(true);
             }
 
-            initialize(player) {
-                this.target = player;
+            initialize(player, type = 'default') {
+                this.player = player;
                 this.setActive(true);
                 this.setVisible(true);
                 this.scoreIncremented = false;
-
                 this.setVelocity(0, 0);
-                this.health = 1; // Reset health
-                console.log(`Enemy initialized with health: ${this.health}`);
+                this.health = this.maxHealth;
+
+                // Set initial state and properties based on enemy type
+                switch (type) {
+                    case 'stealth':
+                        this.state = this.State.STEALTH;
+                        this.speed = 120;
+                        break;
+                    case 'sniper':
+                        this.state = this.State.PATROL;
+                        this.detectionRange = 500;
+                        this.attackRange = 400;
+                        this.speed = 80;
+                        break;
+                    default:
+                        this.state = this.State.PATROL;
+                        break;
+                }
+
+                // Define patrol points
+                this.patrolPoints = this.generatePatrolPoints();
+                this.currentPatrolIndex = 0;
+
+                console.log(`Enemy initialized with health: ${this.health}, type: ${type}`);
             }
 
             update(time, delta) {
-                if (this.target) {
-                    if (this.target.invisibilityActive) {
-                        this.setVelocity(0, 0);
-                    } else {
-                        this.scene.physics.moveToObject(this, this.target.sprite, this.speed);
-                    }
+                switch (this.state) {
+                    case this.State.IDLE:
+                        this.idleBehavior();
+                        break;
+                    case this.State.PATROL:
+                        this.patrolBehavior();
+                        break;
+                    case this.State.ALERT:
+                        this.alertBehavior(delta);
+                        break;
+                    case this.State.CHASE:
+                        this.chaseBehavior();
+                        break;
+                    case this.State.ATTACK:
+                        this.attackBehavior(time);
+                        break;
+                    case this.State.FLEE:
+                        this.fleeBehavior();
+                        break;
+                    case this.State.SEARCH:
+                        this.searchBehavior(delta);
+                        break;
+                    case this.State.REGENERATION:
+                        this.regenerationBehavior(delta);
+                        break;
+                    case this.State.STEALTH:
+                        this.stealthBehavior(delta);
+                        break;
+                    default:
+                        this.idleBehavior();
+                        break;
                 }
+            }
+
+            // Behavior Methods
+
+            idleBehavior() {
+                this.setVelocity(0, 0); // Stay stationary
+
+                // Transition to PATROL after a delay or if player is detected
+                if (this.canSeePlayer()) {
+                    this.state = this.State.ALERT;
+                }
+            }
+
+            patrolBehavior() {
+                if (this.patrolPoints.length === 0) return;
+
+                const targetPoint = this.patrolPoints[this.currentPatrolIndex];
+                this.scene.physics.moveTo(this, targetPoint.x, targetPoint.y, this.speed);
+
+                // Check if reached the patrol point
+                if (Phaser.Math.Distance.Between(this.x, this.y, targetPoint.x, targetPoint.y) < 10) {
+                    this.currentPatrolIndex = (this.currentPatrolIndex + 1) % this.patrolPoints.length;
+                }
+
+                // Transition to ALERT if player is detected
+                if (this.canSeePlayer()) {
+                    this.state = this.State.ALERT;
+                    this.alertTimer = 0;
+                }
+            }
+
+            alertBehavior(delta) {
+                this.setVelocity(0, 0); // Stop moving
+                this.alertTimer += delta;
+
+                // Look around (rotate)
+                this.setAngularVelocity(60); // Rotate at 60 degrees per second
+
+                if (this.alertTimer >= this.alertDuration) {
+                    this.alertTimer = 0;
+                    this.state = this.State.PATROL; // Return to patrol
+                    this.setAngularVelocity(0); // Stop rotating
+                }
+
+                // Transition to CHASE if player is detected
+                if (this.canSeePlayer()) {
+                    this.state = this.State.CHASE;
+                    this.setAngularVelocity(0); // Stop rotating
+                }
+            }
+
+            chaseBehavior() {
+                if (!this.player) return;
+
+                this.scene.physics.moveToObject(this, this.player.sprite, this.speed);
+
+                // Transition to ATTACK if within attack range
+                const distance = Phaser.Math.Distance.Between(this.x, this.y, this.player.sprite.x, this.player.sprite.y);
+                if (distance <= this.attackRange) {
+                    this.state = this.State.ATTACK;
+                }
+
+                // Transition to SEARCH if player is lost
+                if (!this.canSeePlayer()) {
+                    this.state = this.State.SEARCH;
+                    this.lastKnownPosition = { x: this.player.sprite.x, y: this.player.sprite.y };
+                    this.searchTimer = 0;
+                }
+            }
+
+            attackBehavior(time) {
+                // Face the player
+                this.rotation = Phaser.Math.Angle.Between(this.x, this.y, this.player.sprite.x, this.player.sprite.y);
+
+                // Fire at the player
+                if (this.canFire(time)) {
+                    this.fireAtPlayer();
+                }
+
+                // Transition to CHASE if player moves out of attack range
+                const distance = Phaser.Math.Distance.Between(this.x, this.y, this.player.sprite.x, this.player.sprite.y);
+                if (distance > this.attackRange) {
+                    this.state = this.State.CHASE;
+                }
+
+                // Transition to FLEE if health is low
+                if (this.health <= this.maxHealth * 0.3) {
+                    this.state = this.State.FLEE;
+                }
+            }
+
+            fleeBehavior() {
+                if (!this.player) return;
+
+                // Move away from the player
+                const angle = Phaser.Math.Angle.Between(this.x, this.y, this.player.sprite.x, this.player.sprite.y) + Math.PI;
+                this.setVelocity(Math.cos(angle) * this.speed, Math.sin(angle) * this.speed);
+
+                // Transition to REGENERATION when safe
+                const distance = Phaser.Math.Distance.Between(this.x, this.y, this.player.sprite.x, this.player.sprite.y);
+                if (distance > this.detectionRange * 2) {
+                    this.state = this.State.REGENERATION;
+                }
+            }
+
+            searchBehavior(delta) {
+                if (!this.lastKnownPosition) {
+                    this.state = this.State.PATROL;
+                    return;
+                }
+
+                // Move towards the last known position
+                this.scene.physics.moveTo(this, this.lastKnownPosition.x, this.lastKnownPosition.y, this.speed);
+
+                // Search timer
+                this.searchTimer += delta;
+                if (this.searchTimer >= this.searchDuration) {
+                    this.state = this.State.PATROL;
+                }
+
+                // Transition back to CHASE if player is found
+                if (this.canSeePlayer()) {
+                    this.state = this.State.CHASE;
+                }
+            }
+
+            regenerationBehavior(delta) {
+                // Heal over time
+                this.health += (this.maxHealth * 0.05) * (delta / 1000); // Heal 5% per second
+                if (this.health >= this.maxHealth) {
+                    this.health = this.maxHealth;
+                    this.state = this.State.PATROL; // Return to patrol when fully healed
+                }
+
+                // Transition to FLEE if player is detected
+                if (this.canSeePlayer()) {
+                    this.state = this.State.FLEE;
+                }
+            }
+
+            stealthBehavior(delta) {
+                if (!this.isCloaked) {
+                    this.isCloaked = true;
+                    this.stealthTimer = 0;
+                    this.setVisible(false);
+                }
+
+                this.stealthTimer += delta;
+
+                // Move towards the player while cloaked
+                this.scene.physics.moveToObject(this, this.player.sprite, this.speed);
+
+                // Transition to ATTACK when close
+                const distance = Phaser.Math.Distance.Between(this.x, this.y, this.player.sprite.x, this.player.sprite.y);
+                if (distance <= this.attackRange / 2) {
+                    this.setVisible(true);
+                    this.isCloaked = false;
+                    this.state = this.State.ATTACK;
+                }
+
+                // Uncloak after duration
+                if (this.stealthTimer >= this.stealthDuration) {
+                    this.setVisible(true);
+                    this.isCloaked = false;
+                    this.state = this.State.CHASE;
+                }
+            }
+
+            // Helper Methods
+
+            canSeePlayer() {
+                if (!this.player) return false;
+                const distance = Phaser.Math.Distance.Between(this.x, this.y, this.player.sprite.x, this.player.sprite.y);
+                return distance <= this.detectionRange && !this.player.invisibilityActive;
+            }
+
+            canFire(time) {
+                if (time > this.lastFired) {
+                    this.lastFired = time + this.fireRate;
+                    return true;
+                }
+                return false;
+            }
+
+            fireAtPlayer() {
+                const bullets = this.scene.enemyBullets;
+                const bullet = bullets.get();
+                if (bullet) {
+                    const angle = Phaser.Math.Angle.Between(this.x, this.y, this.player.sprite.x, this.player.sprite.y);
+                    bullet.fire(this.x, this.y, angle, 300); // Enemy bullet speed
+                }
+            }
+
+            generatePatrolPoints() {
+                // Generate random patrol points within the game world
+                const points = [];
+                for (let i = 0; i < 4; i++) {
+                    const x = Phaser.Math.Between(100, 3900);
+                    const y = Phaser.Math.Between(100, 3900);
+                    points.push({ x, y });
+                }
+                return points;
             }
 
             takeDamage(amount) {
                 if (!this.active) return; // Prevent processing if already inactive
 
                 this.health -= amount;
+                console.log(`Enemy took damage. Health: ${this.health}`);
+
                 if (this.health <= 0) {
-                    if (!this.scoreIncremented) {  // Add this flag
-                        this.scene.score += 50;    // Increment score
-                        this.scene.scoreText.setText('Score: ' + this.scene.score);
-                        this.scoreIncremented = true;  // Set flag to prevent re-incrementing
+                    if (!this.scoreIncremented) {
+                        this.scene.addScore(50); // Increment score using scene's method
+                        this.scoreIncremented = true;
                     }
                     this.disableBody(true, true);
                     console.log('Enemy destroyed');
@@ -615,9 +911,8 @@
 
 
         }
-
         // ====================
-        // Game Scene
+        // Game Scene with Updated Enemy Integration
         // ====================
         class GameScene extends Phaser.Scene {
             constructor() {
@@ -629,58 +924,62 @@
             }
 
             create() {
-                // **Initialize variables**
+                // Initialize variables
                 this.score = 0;
                 this.level = 1;
-                this.maxLevel = 20; // Define maximum level
-                this.hasBoss = false; // Initialize hasBoss flag
+                this.maxLevel = 20;
+                this.hasBoss = false;
 
                 // Set world bounds
                 this.physics.world.setBounds(0, 0, 4000, 4000);
 
                 // Create starfield
                 this.createStarfield();
-            
 
                 // Create player
                 this.player = new Player(this, 2000, 2000, 'player');
 
-                // **Create Bullet Group**
+                // Create bullet groups
                 this.bullets = this.physics.add.group({
                     classType: Bullet,
                     runChildUpdate: true,
-                    maxSize: 100 // Increased maxSize for more bullets
+                    maxSize: 100,
+                });
+
+                // Enemy bullets group
+                this.enemyBullets = this.physics.add.group({
+                    classType: Bullet,
+                    runChildUpdate: true,
+                    maxSize: 100,
                 });
 
                 // Create enemy, boss, and asteroid groups
                 this.enemies = this.physics.add.group({
                     classType: Enemy,
-                    runChildUpdate: true
+                    runChildUpdate: true,
                 });
 
                 this.bosses = this.physics.add.group({
                     classType: BossEnemy,
-                    runChildUpdate: true
+                    runChildUpdate: true,
                 });
 
                 this.asteroids = this.physics.add.group({
                     classType: Asteroid,
-                    runChildUpdate: true
+                    runChildUpdate: true,
                 });
 
-                // **Create Power-Up Group**
+                // Create power-up group
                 this.powerUps = this.physics.add.group({
                     classType: PowerUp,
                     runChildUpdate: true,
-                    maxSize: 10
+                    maxSize: 10,
                 });
 
-                // **Spawn Initial Enemies, Asteroids, and Power-Ups**
+                // Spawn initial entities
                 this.spawnEnemies(this.level);
                 this.spawnAsteroids(this.level);
                 this.spawnPowerUps();
-
-                // **Spawn Boss if Applicable**
                 this.spawnBoss(this.level);
 
                 // Create UI
@@ -689,11 +988,12 @@
                 // Set up collisions
                 this.physics.add.overlap(this.bullets, this.enemies, this.handleBulletEnemyCollision, null, this);
                 this.physics.add.overlap(this.bullets, this.asteroids, this.handleBulletAsteroidCollision, null, this);
-                this.physics.add.overlap(this.bullets, this.bosses, this.handleBulletBossCollision, null, this); // New Collision
+                this.physics.add.overlap(this.bullets, this.bosses, this.handleBulletBossCollision, null, this);
                 this.physics.add.overlap(this.player.sprite, this.enemies, this.handlePlayerEnemyCollision, null, this);
                 this.physics.add.overlap(this.player.sprite, this.asteroids, this.handlePlayerAsteroidCollision, null, this);
                 this.physics.add.overlap(this.player.sprite, this.powerUps, this.handlePowerUpCollision, null, this);
-                this.physics.add.overlap(this.player.sprite, this.bosses, this.handlePlayerBossCollision, null, this); // New Collision
+                this.physics.add.overlap(this.player.sprite, this.bosses, this.handlePlayerBossCollision, null, this);
+                this.physics.add.overlap(this.player.sprite, this.enemyBullets, this.handlePlayerHitByEnemyBullet, null, this);
 
                 // Camera setup
                 this.cameras.main.setBounds(0, 0, 4000, 4000);
@@ -702,34 +1002,18 @@
                 // Environmental Hazards
                 this.createEnvironmentalHazards();
 
-                // **Add Level Transition Variables**
+                // Level transition variables
                 this.isTransitioning = false;
 
-                // **Play Background Music**
+                // Play background music
                 this.playBackgroundMusic();
-            }
-            
-                addScore(points) {
-                this.score += points;
-                this.scoreText.setText('Score: ' + this.score);
             }
 
             update(time, delta) {
                 if (!this.isTransitioning) {
                     this.player.update();
 
-                    // **Debugging Logs (Optional)**
-                    // Uncomment the following lines to see active counts in the console
-                    /*
-                    console.log(`Enemies Active: ${this.enemies.countActive()}`);
-                    console.log(`Asteroids Active: ${this.asteroids.countActive()}`);
-                    console.log(`Bosses Active: ${this.bosses.countActive()}`);
-                    console.log(`Has Boss: ${this.hasBoss}`);
-                    */
-
-                    // **Adjust Level Progression Condition**
-                    // **Remove Asteroids from Level Progression**
-                    // Level up when all enemies and bosses are defeated
+                    // Adjust level progression condition
                     if (this.enemies.countActive() === 0 && (!this.hasBoss || this.bosses.countActive() === 0)) {
                         this.levelUp();
                     }
@@ -753,7 +1037,7 @@
                 this.starGroup = this.add.group({
                     key: 'star',
                     repeat: 500,
-                    setXY: { x: 0, y: 0, stepX: 8, stepY: 6 }
+                    setXY: { x: 0, y: 0, stepX: 8, stepY: 6 },
                 });
 
                 this.starGroup.children.iterate(function (star) {
@@ -768,15 +1052,18 @@
                 for (let i = 0; i < enemyCount; i++) {
                     const x = Phaser.Math.Between(100, 3900);
                     const y = Phaser.Math.Between(100, 3900);
+
+                    // Randomly assign enemy types
+                    const types = ['default', 'stealth', 'sniper'];
+                    const randomType = Phaser.Utils.Array.GetRandom(types);
+
                     const enemy = this.enemies.get(x, y, 'enemy');
                     if (enemy) {
-                        // Prevent spawning enemies too close to the player
                         if (Phaser.Math.Distance.Between(x, y, this.player.sprite.x, this.player.sprite.y) > 100) {
                             enemy.setActive(true);
                             enemy.setVisible(true);
-                            enemy.initialize(this.player);
+                            enemy.initialize(this.player, randomType);
                         } else {
-                            console.log('Enemy spawned too close to the player. Skipping.');
                             enemy.disableBody(true, true);
                         }
                     }
@@ -785,45 +1072,41 @@
             }
 
             spawnBoss(level) {
-                // **Spawn a boss every 5 levels**
+                // Spawn a boss every 5 levels
                 if (level % 5 === 0) {
                     const x = Phaser.Math.Between(1000, 3000);
                     const y = Phaser.Math.Between(1000, 3000);
                     const boss = this.bosses.get(x, y, 'boss');
                     if (boss) {
-                        // Prevent spawning boss too close to the player
                         if (Phaser.Math.Distance.Between(x, y, this.player.sprite.x, this.player.sprite.y) > 200) {
                             boss.setActive(true);
                             boss.setVisible(true);
                             boss.initialize(this.player);
                             console.log(`Boss spawned at (${x}, ${y}) for Level ${level}`);
-                            this.hasBoss = true; // Set hasBoss to true when a boss is spawned
+                            this.hasBoss = true;
                         } else {
-                            console.log('Boss spawned too close to the player. Skipping.');
                             boss.disableBody(true, true);
                             this.hasBoss = false;
                         }
                     }
                 } else {
-                    this.hasBoss = false; // Ensure hasBoss is false when no boss is present
+                    this.hasBoss = false;
                 }
             }
 
             spawnAsteroids(level) {
                 const asteroidCount = 10 + level * 3;
                 for (let i = 0; i < asteroidCount; i++) {
-                    const size = Phaser.Math.Between(1, 3); // 1: Large, 2: Medium, 3: Small
+                    const size = Phaser.Math.Between(1, 3);
                     const x = Phaser.Math.Between(100, 3900);
                     const y = Phaser.Math.Between(100, 3900);
                     const asteroid = this.asteroids.get(x, y, `asteroid_${size}`);
                     if (asteroid) {
-                        // Prevent spawning asteroids too close to the player
                         if (Phaser.Math.Distance.Between(x, y, this.player.sprite.x, this.player.sprite.y) > 100) {
                             asteroid.setActive(true);
                             asteroid.setVisible(true);
                             asteroid.initialize(size);
                         } else {
-                            console.log('Asteroid spawned too close to the player. Skipping.');
                             asteroid.disableAsteroid();
                         }
                     }
@@ -832,32 +1115,27 @@
             }
 
             spawnPowerUps() {
-                // **Define Map Corners**
                 const mapWidth = 4000;
                 const mapHeight = 4000;
                 const corners = [
-                    { x: 50, y: 50 },                     // Top-Left
-                    { x: mapWidth - 50, y: 50 },          // Top-Right
-                    { x: 50, y: mapHeight - 50 },         // Bottom-Left
-                    { x: mapWidth - 50, y: mapHeight - 50 } // Bottom-Right
+                    { x: 50, y: 50 },
+                    { x: mapWidth - 50, y: 50 },
+                    { x: 50, y: mapHeight - 50 },
+                    { x: mapWidth - 50, y: mapHeight - 50 },
                 ];
 
-                // **Power-Up Types**
                 const powerUpTypes = ['shield', 'fire_rate', 'invisibility', 'warp'];
 
-                // **Instantiate Power-Ups at Corners**
                 corners.forEach((corner, index) => {
                     const type = powerUpTypes[index % powerUpTypes.length];
                     const powerUp = this.powerUps.get(corner.x, corner.y, type);
                     if (powerUp) {
-                        // Prevent spawning power-ups too close to the player
                         if (Phaser.Math.Distance.Between(corner.x, corner.y, this.player.sprite.x, this.player.sprite.y) > 100) {
                             powerUp.setActive(true);
                             powerUp.setVisible(true);
                             powerUp.type = type;
                             console.log(`Power-Up '${type}' spawned at (${corner.x}, ${corner.y})`);
                         } else {
-                            console.log('Power-Up spawned too close to the player. Skipping.');
                             powerUp.disableBody(true, true);
                         }
                     }
@@ -867,18 +1145,18 @@
             createUI() {
                 this.scoreText = this.add.text(16, 16, 'Score: 0', {
                     fontSize: '20px',
-                    fill: '#ffffff'
+                    fill: '#ffffff',
                 }).setScrollFactor(0);
 
                 this.levelText = this.add.text(16, 40, 'Level: 1', {
                     fontSize: '20px',
-                    fill: '#ffffff'
+                    fill: '#ffffff',
                 }).setScrollFactor(0);
 
-                // **Health Bar**
+                // Health Bar
                 this.healthBar = this.add.graphics();
                 this.healthBar.fillStyle(0xff0000, 1);
-                this.healthBar.fillRect(16, 70, 100, 20); // x, y, width, height
+                this.healthBar.fillRect(16, 70, 100, 20);
                 this.healthBar.setScrollFactor(0);
             }
 
@@ -889,11 +1167,16 @@
                 this.healthBar.fillRect(16, 70, 100 * healthPercentage, 20);
             }
 
+            addScore(points) {
+                this.score += points;
+                this.scoreText.setText('Score: ' + this.score);
+            }
+
             handleBulletEnemyCollision(bullet, enemy) {
                 if (enemy instanceof Enemy) {
-                    bullet.disableBullet(); // Deactivate the bullet
+                    bullet.disableBullet();
                     if (enemy.active) {
-                        enemy.takeDamage(1); // Apply damage to the enemy
+                        enemy.takeDamage(1);
                         this.sound.play('explosion');
                     }
                 }
@@ -901,27 +1184,22 @@
 
             handleBulletAsteroidCollision(bullet, asteroid) {
                 if (asteroid instanceof Asteroid) {
-                    bullet.disableBullet(); // Deactivate the bullet
-                    asteroid.takeDamage(1); // Apply damage to the asteroid
-
-                    // Play explosion sound
+                    bullet.disableBullet();
+                    asteroid.takeDamage(1);
                     this.sound.play('explosion');
                 }
             }
 
             handleBulletBossCollision(bullet, boss) {
                 if (boss instanceof BossEnemy) {
-                    bullet.disableBullet(); // Deactivate the bullet
-                    boss.takeDamage(1); // Apply damage to the boss
-
-                    // Play explosion sound
+                    bullet.disableBullet();
+                    boss.takeDamage(1);
                     this.sound.play('explosion');
                 }
             }
 
             handlePlayerEnemyCollision(playerSprite, enemy) {
                 if (enemy instanceof Enemy) {
-                    // **Check if Shield is Active**
                     if (this.player.shieldActive) {
                         console.log('Shield absorbed enemy collision');
                     } else {
@@ -929,23 +1207,18 @@
                     }
 
                     enemy.takeDamage(1);
-
-                    // Play collision sound
                     this.sound.play('collision');
 
-                    // **Check for Game Over**
                     if (this.player.health <= 0) {
                         this.gameOver();
                     }
 
-                    // **Update Health Bar**
                     this.updateHealthBar();
                 }
             }
 
             handlePlayerAsteroidCollision(playerSprite, asteroid) {
                 if (asteroid instanceof Asteroid) {
-                    // **Check if Shield is Active**
                     if (this.player.shieldActive) {
                         console.log('Shield absorbed asteroid collision');
                     } else {
@@ -953,47 +1226,37 @@
                     }
 
                     asteroid.takeDamage(1);
-
-                    // Play collision sound
                     this.sound.play('collision');
 
-                    // **Check for Game Over**
                     if (this.player.health <= 0) {
                         this.gameOver();
                     }
 
-                    // **Update Health Bar**
                     this.updateHealthBar();
                 }
             }
 
             handlePlayerBossCollision(playerSprite, boss) {
                 if (boss instanceof BossEnemy) {
-                    // **Check if Shield is Active**
                     if (this.player.shieldActive) {
                         console.log('Shield absorbed boss collision');
                     } else {
-                        this.player.takeDamage(2); // More damage from boss
+                        this.player.takeDamage(2);
                     }
 
-                    boss.takeDamage(2); // Damage to boss upon collision
-
-                    // Play collision sound
+                    boss.takeDamage(2);
                     this.sound.play('collision');
 
-                    // **Check for Game Over**
                     if (this.player.health <= 0) {
                         this.gameOver();
                     }
 
-                    // **Update Health Bar**
                     this.updateHealthBar();
                 }
             }
 
-            handlePowerUpCollision(player, powerUp) {
+            handlePowerUpCollision(playerSprite, powerUp) {
                 if (powerUp instanceof PowerUp) {
-                    // **Apply Power-Up Effect Based on Type**
                     switch (powerUp.type) {
                         case 'shield':
                             this.activateShield();
@@ -1011,92 +1274,89 @@
                             console.warn('Unknown Power-Up Type:', powerUp.type);
                     }
 
-                    // **Deactivate and Hide the Power-Up**
                     powerUp.disableBody(true, true);
-
-                    // **Play Power-Up Sound**
                     this.sound.play('powerup');
-
-                    // **Log the Collection**
                     console.log(`Player collected '${powerUp.type}' power-up`);
                 }
             }
 
+            handlePlayerHitByEnemyBullet(playerSprite, bullet) {
+                bullet.disableBullet();
+                if (!this.player.shieldActive) {
+                    this.player.takeDamage(1);
+                    this.updateHealthBar();
+                    this.sound.play('collision');
+
+                    if (this.player.health <= 0) {
+                        this.gameOver();
+                    }
+                } else {
+                    console.log('Shield absorbed enemy bullet');
+                }
+            }
+
             activateShield() {
-                if (this.player.shieldActive) return; // Prevent stacking shields
+                if (this.player.shieldActive) return;
 
                 this.player.shieldActive = true;
-                this.player.sprite.setTint(0x00ff00); // Green tint to indicate shield
+                this.player.sprite.setTint(0x00ff00);
 
-                // **Set Timer to Deactivate Shield After Duration**
-                this.time.delayedCall(5000, () => { // Shield lasts for 5 seconds
+                this.time.delayedCall(5000, () => {
                     this.player.shieldActive = false;
                     this.player.sprite.clearTint();
                 });
 
-                // **Play Shield Activation Sound**
                 this.sound.play('shield');
-
                 console.log('Shield Activated');
             }
 
             activateFireRateBooster() {
-                if (this.player.fireRateBoosterActive) return; // Prevent stacking boosters
+                if (this.player.fireRateBoosterActive) return;
 
                 this.player.fireRateBoosterActive = true;
-                this.player.fireRate /= 2; // Double the fire rate (half the cooldown)
+                this.player.fireRate /= 2;
 
-                // **Set Timer to Deactivate Fire Rate Booster After Duration**
-                this.time.delayedCall(5000, () => { // Booster lasts for 5 seconds
+                this.time.delayedCall(5000, () => {
                     this.player.fireRateBoosterActive = false;
-                    this.player.fireRate *= 2; // Reset to original fire rate
+                    this.player.fireRate *= 2;
                 });
 
-                // **Play Fire Rate Booster Sound**
                 this.sound.play('fire_rate_booster');
-
                 console.log('Fire Rate Booster Activated');
             }
 
             activateInvisibilityCloak() {
-                if (this.player.invisibilityActive) return; // Prevent stacking
+                if (this.player.invisibilityActive) return;
 
                 this.player.invisibilityActive = true;
-                this.player.sprite.setTint(0x0000ff); // Blue tint
-                this.player.sprite.alpha = 0.5; // Semi-transparent
+                this.player.sprite.setTint(0x0000ff);
+                this.player.sprite.alpha = 0.5;
 
-                // **Set Timer to Deactivate Invisibility After Duration**
-                this.time.delayedCall(5000, () => { // Invisibility lasts for 5 seconds
+                this.time.delayedCall(5000, () => {
                     this.player.invisibilityActive = false;
                     this.player.sprite.clearTint();
-                    this.player.sprite.alpha = 1; // Reset opacity
+                    this.player.sprite.alpha = 1;
                 });
 
-                // **Play Invisibility Activation Sound**
                 this.sound.play('invisibility');
-
                 console.log('Invisibility Cloak Activated');
             }
 
             activateWarp() {
-                // **Define Safe Areas or Calculate Safe Location**
                 const safeAreas = [
                     { x: 2000, y: 2000 },
                     { x: 1000, y: 1000 },
                     { x: 3000, y: 3000 },
-                    { x: 2500, y: 3500 }
+                    { x: 2500, y: 3500 },
                 ];
 
-                // **Select a Random Safe Area**
                 const randomIndex = Phaser.Math.Between(0, safeAreas.length - 1);
                 const selectedSafeArea = safeAreas[randomIndex];
 
-                // **Teleport Player**
                 this.player.sprite.setPosition(selectedSafeArea.x, selectedSafeArea.y);
 
-                // **Play Warp Sound and Visual Feedback**
                 this.sound.play('warp');
-                this.cameras.main.flash(300, 0, 0, 255); // Blue flash
+                this.cameras.main.flash(300, 0, 0, 255);
 
                 console.log(`Player warped to (${selectedSafeArea.x}, ${selectedSafeArea.y})`);
             }
@@ -1111,33 +1371,24 @@
                 this.levelText.setText('Level: ' + this.level);
                 this.isTransitioning = true;
 
-                // **Play Level Up Sound**
                 this.sound.play('level_up');
 
-                // **Display Level Transition Screen**
                 const transitionText = this.add.text(this.cameras.main.midPoint.x, this.cameras.main.midPoint.y, `Level ${this.level}`, {
                     fontSize: '64px',
-                    fill: '#ffffff'
+                    fill: '#ffffff',
                 }).setOrigin(0.5).setDepth(1000);
 
-                // **Fade Out and In Transition**
                 this.cameras.main.fadeOut(1000, 0, 0, 0);
                 this.time.delayedCall(1000, () => {
-                    // Remove transition text
                     transitionText.destroy();
 
-                    // Spawn next level enemies and asteroids
                     this.spawnEnemies(this.level);
                     this.spawnAsteroids(this.level);
                     this.spawnPowerUps();
-
-                    // **Spawn Boss if Applicable**
                     this.spawnBoss(this.level);
 
-                    // Optionally, provide player upgrades
                     this.provideUpgrades();
 
-                    // Fade In
                     this.cameras.main.fadeIn(1000, 0, 0, 0);
                     this.isTransitioning = false;
 
@@ -1146,13 +1397,10 @@
             }
 
             provideUpgrades() {
-                // Implement upgrade logic (e.g., increase player health, add weapons)
-                // For example:
                 this.player.upgradeWeapon();
             }
 
             gameOver() {
-                // **Stop Background Music**
                 if (this.backgroundMusic) {
                     this.backgroundMusic.stop();
                 }
@@ -1161,7 +1409,6 @@
             }
 
             victory() {
-                // **Stop Background Music**
                 if (this.backgroundMusic) {
                     this.backgroundMusic.stop();
                 }
@@ -1170,24 +1417,16 @@
             }
 
             createEnvironmentalHazards() {
-                // Placeholder for environmental hazards like dust storms, fog, etc.
-                // Implement specific hazards based on the level or celestial body
-                // Example: Create a dust storm effect
                 this.hazards = this.add.group();
 
-                // Example: Mars dust storm at Level 2
                 if (this.level === 2) {
                     const storm = this.add.rectangle(2000, 2000, 4000, 4000, 0x888888, 0.1);
                     this.hazards.add(storm);
                 }
-
-                // Add more hazards as needed
             }
 
             updateEnvironmentalHazards() {
                 // Implement effects of environmental hazards
-                // For example, reduce player speed, affect visibility, etc.
-                // This is a placeholder for future implementation
             }
 
             playBackgroundMusic() {
