@@ -147,14 +147,45 @@
                 this.setScale(1);
                 
                 // Optional: Add spin effect
-                this.scene.tweens.add({
+                // Store the tween reference
+                this.spinTween = this.scene.tweens.add({
                     targets: this,
                     angle: 360,
                     duration: 2000,
                     repeat: -1
                 });
             }
+        
+            // Override the destroy method to ensure tween is stopped
+            destroy(fromScene) {
+                if (this.spinTween) {
+                    this.spinTween.stop();
+                    this.spinTween = null;
+                }
+                super.destroy(fromScene);
+            }
+        
+            /**
+             * Disables the power-up and ensures tweens are stopped.
+             */
+            disablePowerUp() {
+                // Stop the spin tween
+                if (this.spinTween) {
+                    this.spinTween.stop();
+                    this.spinTween = null;
+                }
+        
+                this.setActive(false);
+                this.setVisible(false);
+                this.body.stop(); // Stop any ongoing movement
+        
+                // Optionally reset position if using object pooling
+                this.body.reset(0, 0);
+                
+                console.log('Power-Up disabled and tween stopped');
+            }
         }
+
 
         // ====================
         // Bullet Class
