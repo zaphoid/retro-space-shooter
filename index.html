@@ -1160,6 +1160,16 @@
 
 // In your GameScene class
 
+            // Add this to GameScene shutdown
+            shutdown() {
+                this.bullets.clear(true, true);
+                this.enemies.clear(true, true);
+                this.asteroids.clear(true, true);
+                this.time.removeAllEvents();
+                this.events.off(); // Remove all event listeners if any
+            }
+
+
             createUI() {
                 // Existing UI code
                 this.scoreText = this.add.text(16, 16, 'Score: 0', {
